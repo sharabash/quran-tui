@@ -82,6 +82,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     from .controller import Controller
+    from .mcp_quran import MCPSession
     from .player import MpvPlayer
     from .sources.haramain import HaramainSource
     from .sources.quranicaudio import QuranicAudioSource
@@ -94,8 +95,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     player = MpvPlayer(mpv_binary=args.mpv, ytdl_binary=args.ytdl)
     controller = Controller(sources=sources, player=player)
     controller.set_active_source(initial)
+    mcp_session = MCPSession()
 
-    app = QuranTuiApp(controller=controller, control_port=args.control_port)
+    app = QuranTuiApp(
+        controller=controller,
+        mcp_session=mcp_session,
+        control_port=args.control_port,
+    )
     try:
         app.run()
     except KeyboardInterrupt:
