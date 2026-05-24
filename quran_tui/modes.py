@@ -19,7 +19,11 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import DataTable, Input, Static
 
-from .arabic import render_for_terminal, render_for_terminal_wrapped
+from .arabic import (
+    contains_arabic,
+    render_for_terminal,
+    render_for_terminal_wrapped,
+)
 from .mcp_quran import MCPSession, ToolOutcome
 from .models import (
     category_matches_filter,
@@ -445,6 +449,57 @@ _TOOL_FORM: dict[str, list[tuple[str, str, str]]] = {
 }
 
 
+class ArabicResultText(Static):
+    """Static that reshapes its Arabic content to fit its laid-out width.
+
+    Solves a chicken-and-egg problem: we can't pre-wrap Arabic without
+    knowing the column width, and we can't know the column width until
+    Textual has run layout. By keeping the raw codepoints on the widget
+    and reshaping in ``on_resize`` (which fires once layout is done, plus
+    on every SIGWINCH), each row stays correctly wrapped at whatever
+    width it ends up with — no estimation, no race with call_after_refresh.
+
+    Selection mode toggles ``raw_mode`` to bypass reshape entirely, so the
+    rendered codepoints match the canonical RTL source and a click-drag
+    selection lands clean in the system clipboard.
+    """
+
+    def __init__(self, raw_text: str, *, raw_mode: bool = False) -> None:
+        super().__init__(classes="result-text")
+        self._raw_text = raw_text
+        self._raw_mode = raw_mode
+        self._rendered_width = -1
+
+    @property
+    def raw_text(self) -> str:
+        return self._raw_text
+
+    def set_raw_mode(self, raw_mode: bool) -> None:
+        if raw_mode == self._raw_mode:
+            return
+        self._raw_mode = raw_mode
+        self._rendered_width = -1  # force a re-render at next opportunity
+        self._rerender(self.size.width)
+
+    def on_mount(self) -> None:
+        self._rerender(self.size.width)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._rerender(event.size.width)
+
+    def _rerender(self, available: int) -> None:
+        # 1 col of breathing room so the last word doesn't touch the border.
+        width = max(10, available - 1)
+        if width == self._rendered_width and not self._raw_mode:
+            return
+        self._rendered_width = width if not self._raw_mode else -1
+        if self._raw_mode or not contains_arabic(self._raw_text):
+            content = self._raw_text
+        else:
+            content = render_for_terminal_wrapped(self._raw_text, width)
+        self.update(Text(content, no_wrap=True, justify="right"))
+
+
 def _coerce(value: str, name: str) -> Any:
     """Light-touch coercion for form values headed to MCP tools."""
     s = value.strip()
@@ -816,15 +871,7 @@ class StudyMode(Mode):
                 }
             )
             parity = "even" if i % 2 == 0 else "odd"
-            # Placeholder text — we'll repaint with the real reshape once
-            # the row knows its actual column width. Doing it pre-layout
-            # would force us to estimate and we always estimate wrong.
-            # Rich Text(no_wrap=True) is the only way to stop Textual from
-            # re-wrapping the string after our manual line breaks.
-            text_widget = Static(
-                Text(raw_text, no_wrap=True, justify="right"),
-                classes="result-text",
-            )
+            text_widget = ArabicResultText(raw_text, raw_mode=self._raw_mode)
             row = Horizontal(
                 Static(ref, classes="result-key", markup=True),
                 text_widget,
@@ -836,35 +883,13 @@ class StudyMode(Mode):
         await scroll.remove_children()
         if rows:
             scroll.mount(*rows)
-            self.call_after_refresh(self._repaint_result_widths)
             self._select_row(0)
 
-    def _repaint_result_widths(self) -> None:
-        """After layout, ask each result-text Static for its real width
-        and re-render the Arabic with that width. Called once on mount
-        and again on resize (see on_resize). Cheap: 50 rows × one
-        reshape each ≈ 1 ms."""
-        for i, rec in enumerate(self._result_rows):
-            try:
-                row = self.query_one(f"#result-row-{i}", Horizontal)
-                text_w = row.query_one(".result-text", Static)
-            except Exception:
-                continue
-            # Padding eats 2 cols; leave 1 more as breathing room so the
-            # last word never kisses the border.
-            width = max(10, text_w.size.width - 3)
-            source = rec["raw_text"]
-            display = (
-                source
-                if self._raw_mode
-                else render_for_terminal_wrapped(source, width)
-            )
-            rec["display_text"] = display
-            text_w.update(Text(display, no_wrap=True, justify="right"))
-
-    def on_resize(self, event: events.Resize) -> None:
-        if self._result_rows:
-            self._repaint_result_widths()
+    def _apply_raw_mode_to_rows(self) -> None:
+        """Flip every result-text widget into / out of raw mode. Each
+        ArabicResultText handles its own reshape on the next resize tick."""
+        for w in self.query(ArabicResultText):
+            w.set_raw_mode(self._raw_mode)
 
     def _select_row(self, idx: int) -> None:
         if not self._result_rows:
@@ -918,7 +943,7 @@ class StudyMode(Mode):
         # yields proper codepoints), enable=False restores the reshaped
         # left-to-right visual form.
         if self._result_rows:
-            self._repaint_result_widths()
+            self._apply_raw_mode_to_rows()
         status = self.query_one("#study-status", Static)
         if enable:
             status.update(
