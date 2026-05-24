@@ -18,6 +18,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import DataTable, Input, Static
 
+from .arabic import render_for_terminal
 from .mcp_quran import MCPSession, ToolOutcome
 from .models import (
     category_matches_filter,
@@ -723,13 +724,18 @@ def _format_result_row(r: dict) -> str:
     ref = r.get("ayah_key") or f"{r.get('surah', '?')}:{r.get('ayah', '?')}"
     text = r.get("text") or r.get("snippet") or ""
     text = (text[:240] + "…") if len(text) > 240 else text
+    # Reshape + bidi if Arabic — terminals can't apply the bidi algorithm
+    # themselves, so we hand them a presentation-form, LTR-laid-out string.
+    text = render_for_terminal(text)
     edition = (r.get("edition") or {})
     edition_label = ""
     if isinstance(edition, dict):
         ed_id = edition.get("edition_id") or ""
         ed_author = edition.get("author") or ""
         if ed_id or ed_author:
-            edition_label = f"  [dim]{ed_id}{' · ' + ed_author if ed_author else ''}[/dim]"
+            edition_label = (
+                f"  [dim]{ed_id}{' · ' + ed_author if ed_author else ''}[/dim]"
+            )
     return f"[bold #7aa2f7]{ref}[/]  {text}{edition_label}"
 
 
@@ -742,7 +748,7 @@ def _format_metadata(data: dict) -> str:
                 v_text = v_text[:200] + "…"
         else:
             v_text = str(v)
-        bits.append(f"[bold]{k}[/]  {v_text}")
+        bits.append(f"[bold]{k}[/]  {render_for_terminal(v_text)}")
     return "\n".join(bits)
 
 

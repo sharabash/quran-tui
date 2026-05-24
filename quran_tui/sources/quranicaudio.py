@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from ..arabic import render_for_terminal
 from ..models import Category, Track
 from .base import BrowseResult
 
@@ -30,12 +31,13 @@ def _build_track(reciter: dict[str, Any], surah: dict[str, Any]) -> Track:
     url = f"{_STREAM_BASE}{relative}/{surah_id:03d}.mp3"
     name = surah.get("name", {}) or {}
     english = name.get("english") or name.get("simple") or f"Surah {surah_id}"
-    arabic = name.get("arabic", "")
+    arabic_raw = name.get("arabic", "")
     title = f"{surah_id:03d}. {name.get('simple') or english}"
     subtitle = reciter.get("name", "Unknown reciter")
     extra_bits = []
-    if arabic:
-        extra_bits.append(arabic)
+    if arabic_raw:
+        # Reshape + bidi so the surah name reads correctly in an LTR terminal.
+        extra_bits.append(render_for_terminal(arabic_raw))
     if english and english != name.get("simple"):
         extra_bits.append(english)
     revelation = surah.get("revelation_place")
@@ -134,7 +136,7 @@ class QuranicAudioSource:
                     Category(
                         key=f"reciter:{r['id']}",
                         title=r.get("name", "Unknown"),
-                        subtitle=r.get("arabic_name", "") or "",
+                        subtitle=render_for_terminal(r.get("arabic_name", "") or ""),
                     )
                     for r in reciters
                     if int(r.get("section_id") or 0) == section_id
