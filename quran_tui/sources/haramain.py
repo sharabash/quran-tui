@@ -12,12 +12,18 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import Sequence
 
 import httpx
 
 from ..models import Category, Track
 from .base import BrowseResult
+
+# How stale the cached feed can get before we automatically re-fetch on a
+# root browse. The haramain.info blog typically posts a few entries per day,
+# so an hour is a sensible cap.
+DEFAULT_CACHE_TTL_S = 3600.0
 
 _FEED_URL = "http://www.haramain.info/feeds/posts/default?alt=rss&max-results=500"
 _MP3_RE = re.compile(
@@ -78,12 +84,28 @@ class HaramainSource:
     name = "haramain"
     label = "Haramain"
 
-    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient | None = None,
+        *,
+        cache_ttl_s: float = DEFAULT_CACHE_TTL_S,
+    ) -> None:
         self._client = client
         self._owns_client = client is None
         self._tracks: list[Track] = []
         self._loaded = False
+        self._last_refreshed: float | None = None
+        self._cache_ttl_s = cache_ttl_s
         self._lock = asyncio.Lock()
+
+    @property
+    def last_refreshed(self) -> float | None:
+        return self._last_refreshed
+
+    def cache_is_stale(self) -> bool:
+        if self._last_refreshed is None:
+            return True
+        return (time.time() - self._last_refreshed) > self._cache_ttl_s
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -114,17 +136,17 @@ class HaramainSource:
                     continue
                 seen.add(url)
                 tracks.append(_build_track(match))
-            # Most-recent first.
             tracks.sort(
                 key=lambda t: (t.raw["date"], t.raw["location"], t.raw["prayer"]),
                 reverse=True,
             )
             self._tracks = tracks
             self._loaded = True
+            self._last_refreshed = time.time()
             return len(tracks)
 
     async def _ensure_loaded(self) -> None:
-        if not self._loaded:
+        if not self._loaded or self.cache_is_stale():
             await self.refresh()
 
     # --- Source protocol -------------------------------------------------

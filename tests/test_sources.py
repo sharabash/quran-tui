@@ -141,3 +141,55 @@ async def test_haramain_parses_feed_and_groups() -> None:
         assert len(makkah.tracks) == 2
         for t in makkah.tracks:
             assert t.raw["location"] == "makkah"
+
+
+@pytest.mark.asyncio
+async def test_haramain_cache_stale_triggers_refetch(monkeypatch) -> None:
+    fetches = 0
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal fetches
+        fetches += 1
+        return httpx.Response(
+            200,
+            text=(
+                '<rss><channel><item><enclosure url='
+                '"https://mirrors.quranicaudio.com/haramain/2026/05/madinah/'
+                'SheikhX_Fajr-2026-05-24.mp3"/></item></channel></rss>'
+            ),
+        )
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        src = HaramainSource(client=client, cache_ttl_s=1.0)
+        await src.browse([])  # first call → 1 fetch
+        await src.browse([])  # cached, still 1
+        assert fetches == 1
+        # Trip the TTL.
+
+        original = src._last_refreshed
+        src._last_refreshed = original - 10 if original else None  # type: ignore[assignment]
+        assert src.cache_is_stale()
+        await src.browse([])
+        assert fetches == 2
+
+
+@pytest.mark.asyncio
+async def test_haramain_refresh_returns_count_and_updates_timestamp() -> None:
+    sample_feed = """
+    <rss><channel>
+    <item><enclosure url="https://mirrors.quranicaudio.com/haramain/2026/05/madinah/SheikhA_Fajr-2026-05-24.mp3"/></item>
+    <item><enclosure url="https://mirrors.quranicaudio.com/haramain/2026/05/makkah/SheikhB_Isha-2026-05-24.mp3"/></item>
+    </channel></rss>
+    """
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=sample_feed)
+
+    transport = httpx.MockTransport(handle)
+    async with httpx.AsyncClient(transport=transport) as client:
+        src = HaramainSource(client=client)
+        assert src.last_refreshed is None
+        loaded = await src.refresh()
+        assert loaded == 2
+        assert src.last_refreshed is not None

@@ -121,7 +121,27 @@ class Controller:
         return await self._browse(bs.path[:-1])
 
     async def refresh(self) -> BrowseResult:
+        """Re-render the current path from the source (uses any cache)."""
         return await self._browse(self.active_browse().path)
+
+    async def force_refresh(self) -> tuple[BrowseResult, int]:
+        """Force the active source to re-fetch upstream content, then re-browse.
+
+        Returns ``(result, items_loaded)``. ``items_loaded`` is ``-1`` for
+        sources that don't expose a refresh method.
+        """
+        source = self.state.active_source
+        loaded = -1
+        if source is not None:
+            refresh = getattr(source, "refresh", None)
+            if callable(refresh):
+                try:
+                    loaded = int(await refresh())
+                except Exception as exc:
+                    self.state.status = f"Refresh failed: {exc}"
+                    return await self._browse(self.active_browse().path), -1
+        result = await self._browse(self.active_browse().path)
+        return result, loaded
 
     async def _browse(self, path: list[str]) -> BrowseResult:
         source = self.state.active_source

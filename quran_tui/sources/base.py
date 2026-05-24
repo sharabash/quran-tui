@@ -51,3 +51,11 @@ class Source(Protocol):
         Defaults to ``track.stream_url`` for sources that put the URL inline.
         """
         ...
+
+
+class RefreshableSource(Source, Protocol):
+    """Optional protocol for sources whose backend changes over time."""
+
+    async def refresh(self) -> int:
+        """Re-fetch upstream content. Returns the number of items loaded."""
+        ...

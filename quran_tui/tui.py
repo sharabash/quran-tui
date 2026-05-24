@@ -187,7 +187,8 @@ class NowPlaying(Static):
 HELP_LINES = [
     ("1 / 2", "Switch source (Quranic Audio / Haramain)"),
     ("Enter", "Drill into category · play track"),
-    ("Backspace / Esc", "Go up one level in the browse tree"),
+    ("Backspace / u", "Go up one level in the browse tree"),
+    ("r", "Refresh active source (re-fetch upstream)"),
     ("a", "Enqueue selected track"),
     ("A", "Enqueue every track in the current view"),
     ("d / Delete", "Dequeue (when focused on the Queue pane)"),
@@ -328,7 +329,9 @@ class QuranTuiApp(App[None]):
         Binding("space", "toggle_pause", "Play/Pause", priority=True),
         Binding("1", "switch_source(0)", "Quranic Audio"),
         Binding("2", "switch_source(1)", "Haramain"),
-        Binding("backspace", "browse_up", "Up"),
+        Binding("backspace", "browse_up", "Up a level"),
+        Binding("u", "browse_up", "Up", show=False),
+        Binding("r", "refresh_source", "Refresh"),
         Binding("n", "next_track", "Next"),
         Binding("b", "prev_track", "Prev"),
         Binding("left_square_bracket", "seek_back", "-10s"),
@@ -559,6 +562,23 @@ class QuranTuiApp(App[None]):
             return
         self._clear_filter()
         self._render_browse()
+
+    async def action_refresh_source(self) -> None:
+        source = self.controller.state.active_source
+        if source is None:
+            return
+        self.notify(f"refreshing {source.label}…", timeout=2)
+        try:
+            _result, loaded = await self.controller.force_refresh()
+        except Exception as exc:
+            self.notify(f"Refresh failed: {exc}", severity="error", timeout=6)
+            return
+        self._clear_filter()
+        self._render_browse()
+        if loaded >= 0:
+            self.notify(f"{source.label}: {loaded} items", timeout=3)
+        else:
+            self.notify(f"{source.label} re-loaded", timeout=2)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "browse-table":

@@ -158,3 +158,39 @@ def test_shuffle_upcoming_preserves_history() -> None:
 def test_controller_requires_at_least_one_source() -> None:
     with pytest.raises(ValueError):
         Controller(sources=[], player=FakePlayer())
+
+
+class RefreshableFakeSource(FakeSource):
+    def __init__(self) -> None:
+        super().__init__()
+        self.refresh_calls = 0
+
+    async def refresh(self) -> int:
+        self.refresh_calls += 1
+        return 42
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_calls_source_refresh_then_rebrowses() -> None:
+    src = RefreshableFakeSource()
+    controller = Controller(sources=[src], player=FakePlayer())
+    await controller.browse_root()
+    await controller.browse_into("a")
+    assert src.refresh_calls == 0
+
+    result, loaded = await controller.force_refresh()
+    assert src.refresh_calls == 1
+    assert loaded == 42
+    # Should still be at path ["a"] after the refresh.
+    assert controller.active_browse().path == ["a"]
+    assert result.title == "Fake / Category A"
+
+
+@pytest.mark.asyncio
+async def test_force_refresh_falls_back_when_source_has_no_refresh() -> None:
+    src = FakeSource()
+    controller = Controller(sources=[src], player=FakePlayer())
+    await controller.browse_root()
+    result, loaded = await controller.force_refresh()
+    assert loaded == -1
+    assert result.title == "Fake root"
