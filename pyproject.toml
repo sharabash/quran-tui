@@ -1,0 +1,65 @@
+[project]
+name = "quran-tui"
+version = "0.1.0"
+description = "A keyboard-driven terminal UI for Quran audio — quranicaudio.com + haramain.info."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Nour Sharabash", email = "nour@quran.com" },
+]
+keywords = ["quran", "tui", "audio-player", "textual", "mpv", "terminal"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+    "Topic :: Religion",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "httpx>=0.27",
+    "textual>=0.86.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/sharabash/quran-tui"
+Repository = "https://github.com/sharabash/quran-tui"
+Issues = "https://github.com/sharabash/quran-tui/issues"
+
+[project.scripts]
+quran-tui = "quran_tui.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+ignore = ["B008", "E501"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["quran_tui"]
