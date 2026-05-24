@@ -977,20 +977,20 @@ class StudyMode(Mode):
         if not payload:
             self.app.notify("nothing to copy on this row", severity="warning", timeout=3)
             return
-        # Textual's copy_to_clipboard emits OSC-52, which Windows Terminal +
-        # most modern terminals honour. Falls back to a notification if the
-        # terminal doesn't grant clipboard access.
-        try:
-            self.app.copy_to_clipboard(payload)
+        from .clipboard import copy_text
+
+        ok, mechanism = copy_text(payload)
+        if ok:
             self.app.notify(
-                f"copied original Arabic for {rec['ref']} ({len(payload)} chars)",
+                f"copied {rec['ref']} ({len(payload)} chars) via {mechanism}",
                 timeout=3,
             )
-        except Exception as exc:
+        else:
             self.app.notify(
-                f"copy failed ({exc}); your terminal may not support OSC-52",
+                f"copy failed — no working backend ({mechanism}). "
+                "Install xclip / wl-copy / clip.exe.",
                 severity="warning",
-                timeout=5,
+                timeout=6,
             )
 
     def on_click(self, event) -> None:
