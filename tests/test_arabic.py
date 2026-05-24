@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from quran_tui.arabic import contains_arabic, render_for_terminal
+from quran_tui.arabic import (
+    contains_arabic,
+    render_for_terminal,
+    render_for_terminal_wrapped,
+)
 
 
 def test_contains_arabic_detects_real_quran_codepoints() -> None:
@@ -67,3 +71,29 @@ def test_mixed_string_preserves_latin_portion() -> None:
     assert "middle" in rendered
     # The Arabic portion is shaped.
     assert any(0xFB50 <= ord(c) <= 0xFEFF for c in rendered)
+
+
+def test_wrapped_preserves_logical_top_down_reading_order() -> None:
+    """The logical first word should land on the FIRST line of output,
+    not the last — that's the whole point of pre-wrapping before bidi."""
+    # Sentence: "patience for sure is light" — first word "اصبر" should
+    # appear in the top line, not the bottom one.
+    raw = "اصبر فإن الصبر نور وثبات في القلب"
+    wrapped = render_for_terminal_wrapped(raw, width=10, force=True)
+    lines = wrapped.split("\n")
+    assert len(lines) >= 2
+    # The reshaped first word should be discoverable in the top line.
+    top = render_for_terminal("اصبر", force=True)
+    assert top in lines[0]
+    # And NOT in the bottom line.
+    assert top not in lines[-1]
+
+
+def test_wrapped_passthrough_for_non_arabic() -> None:
+    assert render_for_terminal_wrapped("hello world", width=5) == "hello world"
+    assert render_for_terminal_wrapped("", width=10) == ""
+
+
+def test_wrapped_force_false_returns_original() -> None:
+    raw = "اصبر فإن الصبر نور"
+    assert render_for_terminal_wrapped(raw, width=10, force=False) == raw

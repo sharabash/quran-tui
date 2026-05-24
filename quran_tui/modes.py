@@ -18,7 +18,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import DataTable, Input, Static
 
-from .arabic import render_for_terminal
+from .arabic import render_for_terminal, render_for_terminal_wrapped
 from .mcp_quran import MCPSession, ToolOutcome
 from .models import (
     category_matches_filter,
@@ -775,10 +775,17 @@ class StudyMode(Mode):
         self._result_rows = []
         self._selected_row = -1
         rows: list[Horizontal] = []
+        # Pre-wrap Arabic at the logical (right-to-left) level before reshape,
+        # so multi-line ayahs read top-to-bottom in the natural order. The
+        # 40-col fudge accounts for sidebar(18) + borders/padding(~12) + the
+        # left ayah-key column(~10). It's a sane default; a SIGWINCH-driven
+        # re-render would be nice-to-have but the wrap point isn't sensitive
+        # to ±5 cols.
+        text_width = max(20, self.app.size.width - 40)
         for i, r in enumerate(results[:50]):
             ref = r.get("ayah_key") or f"{r.get('surah', '?')}:{r.get('ayah', '?')}"
             raw_text = r.get("text") or r.get("snippet") or ""
-            display_text = render_for_terminal(raw_text)
+            display_text = render_for_terminal_wrapped(raw_text, text_width)
             edition = r.get("edition") or {}
             edition_label = ""
             if isinstance(edition, dict):
