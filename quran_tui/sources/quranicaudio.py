@@ -19,7 +19,6 @@ import httpx
 from ..models import Category, Track
 from .base import BrowseResult
 
-
 _BASE = "https://quranicaudio.com/api"
 _STREAM_BASE = "https://download.quranicaudio.com/quran/"
 _USER_AGENT = "quran-tui/0.1 (+https://github.com/sharabash/quran-tui)"

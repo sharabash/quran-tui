@@ -122,7 +122,7 @@ async def run() -> int:
         # 9. Shuffle the queue (we only have one track; should be a no-op).
         await pilot.press("s")
         await pilot.pause(0.3)
-        print(f"[smoke] shuffle ok (no-op on single-track queue)")
+        print("[smoke] shuffle ok (no-op on single-track queue)")
 
         # 10. Switch back to Quranic Audio — browse state should persist.
         await pilot.press("1")

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 # ---------------------------------------------------------------------------
 # Track — the unit of playback. Origins vary (a surah recorded by a reciter,
 # a salah recording from a haram, an imam's Tarawih, etc.) so the dataclass

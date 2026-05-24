@@ -31,8 +31,6 @@ from .models import (
     format_duration,
     track_matches_filter,
 )
-from .sources.base import BrowseResult
-
 
 # ---------------------------------------------------------------------------
 # Trackbar (full-width, click-to-seek)

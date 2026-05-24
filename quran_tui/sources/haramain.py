@@ -13,13 +13,11 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import Sequence
-from typing import Any
 
 import httpx
 
 from ..models import Category, Track
 from .base import BrowseResult
-
 
 _FEED_URL = "http://www.haramain.info/feeds/posts/default?alt=rss&max-results=500"
 _MP3_RE = re.compile(
