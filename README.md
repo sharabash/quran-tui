@@ -74,3 +74,4 @@ quran_tui/
 ## License
 
 MIT.
+
