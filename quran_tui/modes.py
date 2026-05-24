@@ -625,6 +625,11 @@ class StudyMode(Mode):
         Binding("k", "select_prev", "Prev result", show=False),
         Binding("down", "select_next", "Next result", show=False),
         Binding("up", "select_prev", "Prev result", show=False),
+        # ctrl+y is priority so it fires even when search Input has focus —
+        # users typing a query can hit ctrl+y to copy the top result without
+        # having to tab out first. The plain 'c'/'y' work once focus has
+        # moved off the Input (we auto-move it after results land).
+        Binding("ctrl+y", "copy_selected", "Copy", priority=True),
         Binding("c", "copy_selected", "Copy ayah"),
         Binding("y", "copy_selected", "Copy", show=False),
         Binding("v", "toggle_select_mode", "Select"),
@@ -681,8 +686,8 @@ class StudyMode(Mode):
         await self._mount_results_body(
             Static(
                 "[dim]Pick a tool, type a query, then press [b]Enter[/b] to run.[/dim]"
-                "\n[dim]On Arabic results: [b]c[/b] to copy the original ayah · "
-                "[b]↑/↓[/b] to navigate.[/dim]",
+                "\n[dim]On results: [b]↑/↓[/b] navigate · [b]c[/b] copy current row · "
+                "[b]Ctrl+Y[/b] copy from anywhere · [b]v[/b] drag-select mode.[/dim]",
                 markup=True,
             )
         )
@@ -884,6 +889,13 @@ class StudyMode(Mode):
         if rows:
             scroll.mount(*rows)
             self._select_row(0)
+            # Move focus off the search Input so c/v/j/k act as bindings
+            # instead of typing into the query box. VerticalScroll has
+            # can_focus=True by default — it'll claim the keys we want.
+            try:
+                scroll.focus()
+            except Exception:
+                pass
 
     def _apply_raw_mode_to_rows(self) -> None:
         """Flip every result-text widget into / out of raw mode. Each
