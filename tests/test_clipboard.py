@@ -20,7 +20,7 @@ def test_empty_returns_false(monkeypatch) -> None:
 def test_wsl_prefers_clip_exe(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], text: str) -> bool:
+    def fake_run(cmd: list[str], text: str, *, encoding: str = "utf-8") -> bool:
         calls.append(cmd)
         return cmd[0] == "clip.exe"
 
@@ -38,7 +38,7 @@ def test_wsl_prefers_clip_exe(monkeypatch) -> None:
 def test_x11_falls_through_to_xclip(monkeypatch) -> None:
     calls: list[list[str]] = []
 
-    def fake_run(cmd: list[str], text: str) -> bool:
+    def fake_run(cmd: list[str], text: str, *, encoding: str = "utf-8") -> bool:
         calls.append(cmd)
         return cmd[0] == "xclip"
 

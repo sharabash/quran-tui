@@ -65,13 +65,13 @@ def _is_wsl() -> bool:
         return False
 
 
-def _run_pipe(cmd: list[str], text: str) -> bool:
+def _run_pipe(cmd: list[str], text: str, *, encoding: str = "utf-8") -> bool:
     if not shutil.which(cmd[0]):
         return False
     try:
         proc = subprocess.run(
             cmd,
-            input=text.encode("utf-8"),
+            input=text.encode(encoding),
             capture_output=True,
             timeout=5,
         )
@@ -81,7 +81,12 @@ def _run_pipe(cmd: list[str], text: str) -> bool:
 
 
 def _clip_exe(text: str) -> tuple[bool, str]:
-    return _run_pipe(["clip.exe"], text), "clip.exe (WSL)"
+    # clip.exe reads stdin as the Windows OEM codepage (cp437/cp1252 on
+    # US systems), which mangles non-ASCII UTF-8 — Arabic comes out as
+    # cp437 glyphs ("╪º┘ä"). Encoding as UTF-16 (with BOM, which "utf-16"
+    # produces by default) is the Windows-native clipboard format and
+    # round-trips correctly through clip.exe.
+    return _run_pipe(["clip.exe"], text, encoding="utf-16"), "clip.exe (WSL)"
 
 
 def _wl_copy(text: str) -> tuple[bool, str]:
