@@ -137,18 +137,29 @@ class QuranTuiApp(App[None]):
 
     BINDINGS = [
         Binding("q", "quit", "Quit", priority=True),
-        Binding("ctrl+c", "quit", "Quit", priority=True),
+        Binding("ctrl+c", "quit", "Quit", priority=True, show=False),
         Binding("question_mark", "show_help", "Help"),
+        # Several routes to the same mode-switch action so we don't depend on
+        # any one keyboard layout / terminal: Alt+N, Ctrl+N, and F1..F3 all
+        # work. Plain digits route through the sidebar via the ModeButton
+        # focus + Enter path.
         Binding("alt+1", "switch_mode('listen')", "Listen", priority=True),
         Binding("alt+2", "switch_mode('study')", "Study", priority=True),
         Binding("alt+3", "switch_mode('read')", "Read", priority=True),
+        Binding("ctrl+1", "switch_mode('listen')", show=False, priority=True),
+        Binding("ctrl+2", "switch_mode('study')", show=False, priority=True),
+        Binding("ctrl+3", "switch_mode('read')", show=False, priority=True),
+        Binding("f1", "switch_mode('listen')", show=False, priority=True),
+        Binding("f2", "switch_mode('study')", show=False, priority=True),
+        Binding("f3", "switch_mode('read')", show=False, priority=True),
+        Binding("tab", "focus_nav", show=False),
         Binding("space", "toggle_pause", "Play/Pause", priority=True),
         Binding("n", "next_track", "Next"),
         Binding("b", "prev_track", "Prev"),
-        Binding("left_square_bracket", "seek_back", "-10s"),
-        Binding("right_square_bracket", "seek_fwd", "+10s"),
-        Binding("minus", "vol_down", "Vol-"),
-        Binding("equals_sign", "vol_up", "Vol+"),
+        Binding("left_square_bracket", "seek_back", "-10s", key_display="[ "),
+        Binding("right_square_bracket", "seek_fwd", "+10s", key_display="] "),
+        Binding("minus", "vol_down", "Vol-", key_display="- "),
+        Binding("equals_sign", "vol_up", "Vol+", key_display="= "),
         Binding("s", "shuffle_upcoming", "Shuffle", show=False),
         Binding("d", "dequeue_selected", "Dequeue", show=False),
         Binding("delete", "dequeue_selected", "Dequeue", show=False),
@@ -178,9 +189,9 @@ class QuranTuiApp(App[None]):
         with Horizontal(id="shell"):
             yield PrimaryNav(
                 [
-                    ("listen", "Listen", ListenMode.MODE_ICON),
-                    ("study", "Study", StudyMode.MODE_ICON),
-                    ("read", "Read", ReadMode.MODE_ICON),
+                    ("listen", "Listen"),
+                    ("study", "Study"),
+                    ("read", "Read"),
                 ]
             )
             with Container(id="mode-host"):
@@ -278,6 +289,19 @@ class QuranTuiApp(App[None]):
 
     def on_primary_nav_select(self, message: PrimaryNav.Select) -> None:
         self.action_switch_mode(message.name)
+
+    def action_focus_nav(self) -> None:
+        """Tab → cycle focus into the sidebar."""
+        try:
+            nav = self.query_one(PrimaryNav)
+            nav.focus(scroll_visible=False)
+            # Focus the active mode button so digit / Enter work immediately.
+            for btn in nav.query("ModeButton"):
+                if "active" in btn.classes:
+                    btn.focus()
+                    return
+        except Exception:
+            pass
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())

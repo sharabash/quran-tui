@@ -110,18 +110,30 @@ class ListenMode(Mode):
         Binding("1", "switch_source(0)", "Quranic Audio"),
         Binding("2", "switch_source(1)", "Haramain"),
         Binding("enter", "select", "Enter", show=False),
-        Binding("backspace", "browse_up", "Up a level"),
-        Binding("u", "browse_up", "Up", show=False),
+        # "Back" is the user-facing name; ⌫ in the footer makes the key
+        # visually obvious without spelling out "Backspace".
+        Binding("backspace", "browse_up", "Back", key_display="⌫ "),
+        Binding("u", "browse_up", "Back", show=False),
         Binding("r", "refresh_source", "Refresh"),
         Binding("a", "enqueue_selected", "Enqueue"),
         Binding("A", "enqueue_all", "Enqueue all", show=False),
         Binding("f", "focus_filter", "Filter"),
+        # Shift+arrow extends a range selection. 'a' enqueues whatever's
+        # currently selected (single row OR multi-row range).
+        Binding("shift+down", "extend_select(1)", "Extend ↓", show=False),
+        Binding("shift+up", "extend_select(-1)", "Extend ↑", show=False),
+        Binding("escape", "clear_selection", "Clear selection", show=False),
     ]
 
     def __init__(self, *, controller: Controller) -> None:
         super().__init__()
         self.controller = controller
         self._filter_query: str = ""
+        # Range selection in the browse table. Anchor is the row where the
+        # selection started; selected_range expands as the user shift-arrows
+        # or shift-clicks.
+        self._selection_anchor: int | None = None
+        self._selection: set[int] = set()
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="source-bar"):
@@ -199,11 +211,15 @@ class ListenMode(Mode):
         categories, tracks = self._current_view_items()
         table = self.query_one("#browse-table", DataTable)
         table.clear()
-        for c in categories:
+        # Selection range markers go in column 0.
+        for i, c in enumerate(categories):
             count = "" if c.count is None else str(c.count)
-            table.add_row(f"📁 {c.title}", c.subtitle or "", count)
-        for t in tracks:
-            table.add_row(t.title, t.subtitle, t.extra)
+            marker = "★ " if i in self._selection else ""
+            table.add_row(f"{marker}{c.title}", c.subtitle or "", count)
+        offset = len(categories)
+        for i, t in enumerate(tracks):
+            marker = "★ " if (i + offset) in self._selection else ""
+            table.add_row(f"{marker}{t.title}", t.subtitle, t.extra)
         title = self.query_one("#browse-title", Static)
         bs = self.controller.active_browse()
         base = bs.result.title if bs.result else "Browse"
@@ -289,10 +305,54 @@ class ListenMode(Mode):
         if not table.has_focus:
             return
         categories, tracks = self._current_view_items()
+        cat_count = len(categories)
+
+        # Multi-row enqueue if there's an active selection range.
+        track_rows = sorted(i for i in self._selection if i >= cat_count)
+        if track_rows:
+            to_enqueue = [tracks[i - cat_count] for i in track_rows if i - cat_count < len(tracks)]
+            if to_enqueue:
+                self.app.enqueue_many(to_enqueue)
+                self._clear_selection_state()
+                self._render_browse()
+                return
+
+        # Single-row enqueue (cursor position).
         row = table.cursor_row
-        if row < len(categories) or row >= len(categories) + len(tracks):
+        if row < cat_count or row >= cat_count + len(tracks):
             return
-        self.app.enqueue(tracks[row - len(categories)])
+        self.app.enqueue(tracks[row - cat_count])
+
+    def action_extend_select(self, direction: int) -> None:
+        """Shift+Up / Shift+Down: grow a contiguous selection range."""
+        table = self.query_one("#browse-table", DataTable)
+        if not table.has_focus:
+            return
+        categories, tracks = self._current_view_items()
+        total = len(categories) + len(tracks)
+        if total == 0:
+            return
+        cur = table.cursor_row
+        if self._selection_anchor is None:
+            self._selection_anchor = cur
+            self._selection = {cur}
+        target = max(0, min(total - 1, cur + direction))
+        table.cursor_coordinate = (target, 0)
+        lo, hi = min(self._selection_anchor, target), max(self._selection_anchor, target)
+        self._selection = set(range(lo, hi + 1))
+        self._render_browse()
+        try:
+            table.cursor_coordinate = (target, 0)
+        except Exception:
+            pass
+
+    def action_clear_selection(self) -> None:
+        self._clear_selection_state()
+        self._render_browse()
+
+    def _clear_selection_state(self) -> None:
+        self._selection_anchor = None
+        self._selection = set()
 
     def action_enqueue_all(self) -> None:
         _, tracks = self._current_view_items()
@@ -472,6 +532,31 @@ class StudyMode(Mode):
         padding: 0 1;
         height: 1;
     }
+    .result-row {
+        height: auto;
+        min-height: 1;
+        padding: 0 1;
+    }
+    .result-row.odd {
+        background: $boost;
+    }
+    .result-row > .result-key {
+        width: auto;
+        min-width: 8;
+        color: #7aa2f7;
+        text-style: bold;
+        padding: 0 1 0 0;
+    }
+    .result-row > .result-text {
+        width: 1fr;
+        text-align: right;
+    }
+    .result-row.selected {
+        background: $accent 25%;
+    }
+    .result-row.selected.odd {
+        background: $accent 30%;
+    }
     """
 
     BINDINGS = [
@@ -480,6 +565,12 @@ class StudyMode(Mode):
         Binding("3", "set_subtab(2)", "Word"),
         Binding("4", "set_subtab(3)", "Metadata"),
         Binding("ctrl+enter", "run_tool", "Run", show=False),
+        Binding("j", "select_next", "Next result", show=False),
+        Binding("k", "select_prev", "Prev result", show=False),
+        Binding("down", "select_next", "Next result", show=False),
+        Binding("up", "select_prev", "Prev result", show=False),
+        Binding("c", "copy_selected", "Copy ayah"),
+        Binding("y", "copy_selected", "Copy", show=False),
     ]
 
     active_subtab: reactive[int] = reactive(0)
@@ -490,6 +581,9 @@ class StudyMode(Mode):
         self._active_tool: str = _MCP_SUBTABS[0][2][0]
         self.last_outcome: ToolOutcome | None = None
         self.last_rendered: str = ""
+        # Per-result records {ref, raw_text, edition_label} keyed by index.
+        self._result_rows: list[dict[str, str]] = []
+        self._selected_row: int = -1
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -514,17 +608,26 @@ class StudyMode(Mode):
         yield Input(placeholder="", id="study-input-0", classes="study-input")
         yield Input(placeholder="", id="study-input-1", classes="study-input")
         yield Static("", id="study-status")
-        with VerticalScroll(id="study-results"):
-            yield Static(
-                "[dim]Pick a tool, type a query, then press [b]Enter[/b] to run.[/dim]",
-                id="study-results-body",
-                markup=True,
-            )
+        yield VerticalScroll(id="study-results")
 
     async def on_mount(self) -> None:
         # Initial form for the default tool.
         self._render_subtab()
         self._render_form_for(self._active_tool)
+        # Greeting message
+        await self._mount_results_body(
+            Static(
+                "[dim]Pick a tool, type a query, then press [b]Enter[/b] to run.[/dim]"
+                "\n[dim]On Arabic results: [b]c[/b] to copy the original ayah · "
+                "[b]↑/↓[/b] to navigate.[/dim]",
+                markup=True,
+            )
+        )
+
+    async def _mount_results_body(self, *widgets) -> None:
+        scroll = self.query_one("#study-results", VerticalScroll)
+        await scroll.remove_children()
+        scroll.mount(*widgets)
 
     # --- rendering helpers ----------------------------------------------
 
@@ -600,27 +703,6 @@ class StudyMode(Mode):
         if event.input.id and event.input.id.startswith("study-input-"):
             self.run_worker(self._run_active_tool())
 
-    def on_static_click(self, event) -> None:
-        # Clicking on a tool name in the toolbar switches the active tool.
-        ...
-
-    def on_click(self, event) -> None:
-        # Tap on a sub-tab or tool name.
-        widget = getattr(event, "widget", None)
-        if widget is None:
-            return
-        wid = widget.id or ""
-        if wid.startswith("sub-"):
-            try:
-                idx = int(wid.split("-", 1)[1])
-            except ValueError:
-                return
-            self.action_set_subtab(idx)
-            return
-        if wid.startswith("tool-"):
-            self._set_active_tool(wid.split("-", 1)[1])
-            return
-
     async def _run_active_tool(self) -> None:
         if not self._mcp.is_open:
             self.query_one("#study-status", Static).update(
@@ -645,8 +727,7 @@ class StudyMode(Mode):
         self.query_one("#study-status", Static).update(
             f"[dim]calling [b]{self._active_tool}[/b]…[/dim]"
         )
-        body = self.query_one("#study-results-body", Static)
-        body.update("[dim]…[/dim]")
+        await self._mount_results_body(Static("[dim]…[/dim]", markup=True))
 
         outcome = await self._mcp.call(self._active_tool, args)
         self._render_outcome(outcome)
@@ -654,26 +735,173 @@ class StudyMode(Mode):
     def _render_outcome(self, outcome: ToolOutcome) -> None:
         self.last_outcome = outcome
         status = self.query_one("#study-status", Static)
-        body = self.query_one("#study-results-body", Static)
         if not outcome.ok:
             self.last_rendered = outcome.error or "unknown error"
             status.update("[red]error[/red]")
-            body.update(f"[red]{self.last_rendered}[/red]")
+            self.run_worker(
+                self._mount_results_body(
+                    Static(f"[red]{self.last_rendered}[/red]", markup=True)
+                ),
+                exclusive=True,
+            )
             return
         data = outcome.data
-        rendered = _render_mcp_data(data, fallback_text=outcome.text)
-        self.last_rendered = rendered
-        body.update(rendered)
-        # Footer summary
+
+        results: list[dict] = []
         if isinstance(data, dict):
-            summary_bits = []
             for key in ("results", "matches", "hits"):
                 lst = data.get(key)
-                if isinstance(lst, list):
-                    summary_bits.append(f"{len(lst)} {key}")
-            status.update(f"[dim]ok · {' · '.join(summary_bits) or 'response received'}[/dim]")
+                if isinstance(lst, list) and lst:
+                    results = lst
+                    break
+
+        if results:
+            self.run_worker(self._mount_result_rows(results), exclusive=True)
+            self.last_rendered = f"{len(results)} results"
+            status.update(f"[dim]ok · {len(results)} results · c to copy[/dim]")
         else:
+            rendered = _render_mcp_data(data, fallback_text=outcome.text)
+            self.last_rendered = rendered
+            self.run_worker(
+                self._mount_results_body(Static(rendered, markup=True)),
+                exclusive=True,
+            )
             status.update("[dim]ok[/dim]")
+
+    async def _mount_result_rows(self, results: list[dict]) -> None:
+        """Render search results as horizontal flex rows: ayah-key left,
+        ayah text right-aligned. Stores the original (un-reshaped) text on
+        each row so 'c' can copy the raw codepoints."""
+        self._result_rows = []
+        self._selected_row = -1
+        rows: list[Horizontal] = []
+        for i, r in enumerate(results[:50]):
+            ref = r.get("ayah_key") or f"{r.get('surah', '?')}:{r.get('ayah', '?')}"
+            raw_text = r.get("text") or r.get("snippet") or ""
+            display_text = render_for_terminal(raw_text)
+            edition = r.get("edition") or {}
+            edition_label = ""
+            if isinstance(edition, dict):
+                ed_id = edition.get("edition_id") or ""
+                ed_author = edition.get("author") or ""
+                if ed_id or ed_author:
+                    parts = [ed_id]
+                    if ed_author:
+                        parts.append(ed_author)
+                    edition_label = " · ".join(p for p in parts if p)
+
+            self._result_rows.append(
+                {
+                    "ref": ref,
+                    "raw_text": raw_text,
+                    "display_text": display_text,
+                    "edition_label": edition_label,
+                }
+            )
+            parity = "even" if i % 2 == 0 else "odd"
+            row = Horizontal(
+                Static(ref, classes="result-key", markup=True),
+                Static(display_text, classes="result-text", markup=True),
+                id=f"result-row-{i}",
+                classes=f"result-row {parity}",
+            )
+            rows.append(row)
+        scroll = self.query_one("#study-results", VerticalScroll)
+        await scroll.remove_children()
+        if rows:
+            scroll.mount(*rows)
+            self._select_row(0)
+
+    def _select_row(self, idx: int) -> None:
+        if not self._result_rows:
+            self._selected_row = -1
+            return
+        idx = max(0, min(idx, len(self._result_rows) - 1))
+        prev = self._selected_row
+        self._selected_row = idx
+        if prev >= 0:
+            try:
+                self.query_one(f"#result-row-{prev}", Horizontal).remove_class("selected")
+            except Exception:
+                pass
+        try:
+            row = self.query_one(f"#result-row-{idx}", Horizontal)
+            row.add_class("selected")
+            row.scroll_visible(animate=False)
+        except Exception:
+            pass
+        # Echo edition info in the status so the user knows what they're about to copy.
+        rec = self._result_rows[idx]
+        ed = f"  ·  {rec['edition_label']}" if rec["edition_label"] else ""
+        self.query_one("#study-status", Static).update(
+            f"[dim]row {idx + 1}/{len(self._result_rows)}  ·  {rec['ref']}{ed}  ·  "
+            "press [b]c[/b] to copy[/dim]"
+        )
+
+    def action_select_next(self) -> None:
+        if self._result_rows:
+            self._select_row(self._selected_row + 1)
+
+    def action_select_prev(self) -> None:
+        if self._result_rows:
+            self._select_row(self._selected_row - 1)
+
+    def action_copy_selected(self) -> None:
+        if not self._result_rows or self._selected_row < 0:
+            self.app.notify(
+                "no result selected — type a query and run a tool first",
+                severity="information",
+                timeout=3,
+            )
+            return
+        rec = self._result_rows[self._selected_row]
+        payload = rec["raw_text"]
+        if not payload:
+            self.app.notify("nothing to copy on this row", severity="warning", timeout=3)
+            return
+        # Textual's copy_to_clipboard emits OSC-52, which Windows Terminal +
+        # most modern terminals honour. Falls back to a notification if the
+        # terminal doesn't grant clipboard access.
+        try:
+            self.app.copy_to_clipboard(payload)
+            self.app.notify(
+                f"copied original Arabic for {rec['ref']} ({len(payload)} chars)",
+                timeout=3,
+            )
+        except Exception as exc:
+            self.app.notify(
+                f"copy failed ({exc}); your terminal may not support OSC-52",
+                severity="warning",
+                timeout=5,
+            )
+
+    def on_click(self, event) -> None:
+        # Tap on a sub-tab or tool name.
+        widget = getattr(event, "widget", None)
+        if widget is None:
+            return
+        wid = widget.id or ""
+        if wid.startswith("sub-"):
+            try:
+                idx = int(wid.split("-", 1)[1])
+            except ValueError:
+                return
+            self.action_set_subtab(idx)
+            return
+        if wid.startswith("tool-"):
+            self._set_active_tool(wid.split("-", 1)[1])
+            return
+        # Clicks anywhere on a result row select it.
+        node = widget
+        while node is not None:
+            nid = getattr(node, "id", "") or ""
+            if nid.startswith("result-row-"):
+                try:
+                    self._select_row(int(nid.split("-", 2)[2]))
+                except ValueError:
+                    pass
+                return
+            node = getattr(node, "parent", None)
 
 
 def _render_mcp_data(data: Any, *, fallback_text: str) -> str:

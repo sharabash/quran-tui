@@ -50,16 +50,27 @@ def contains_arabic(text: str) -> bool:
     return _ARABIC_RE.search(text) is not None
 
 
-def render_for_terminal(text: str) -> str:
+def render_for_terminal(text: str, *, force: bool | None = None) -> str:
     """Convert raw Arabic (or mixed) text into a form that looks correct in a
     plain LTR terminal.
 
     - Pure ASCII / non-Arabic input is returned unchanged (fast path).
-    - Strings containing any Arabic codepoint get reshaped + bidi'd.
-    - Strings already in presentation form (FB50–FEFF) still benefit from
-      the bidi pass, so we run them through the pipeline too.
+    - Strings containing any Arabic codepoint get reshaped + bidi'd, UNLESS
+      :func:`quran_tui.terminal_caps.should_reshape_arabic` indicates the
+      terminal handles bidi itself — in which case we pass the raw text
+      through and let the terminal's renderer do its job.
+    - ``force=True`` always reshapes (useful for unit tests and screenshot
+      generation regardless of the runtime terminal).
+    - ``force=False`` always skips reshape.
     """
     if not text or not contains_arabic(text):
+        return text
+    if force is None:
+        from .terminal_caps import should_reshape_arabic
+
+        if not should_reshape_arabic():
+            return text
+    elif force is False:
         return text
     reshaped = arabic_reshaper.reshape(text)
     return get_display(reshaped)

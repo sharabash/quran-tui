@@ -91,7 +91,7 @@ class NowPlaying(Static):
             return
         if self.track is None:
             title_w.update(
-                "[dim italic]nothing playing — press Alt+1 / Alt+2 to navigate[/dim italic]"
+                "[dim italic]nothing playing[/dim italic]"
             )
             return
         marker = "[#f7768e]‖[/#f7768e]" if self.paused else "[#9ece6a]▶[/#9ece6a]"
@@ -166,38 +166,82 @@ class NowPlaying(Static):
 # ---------------------------------------------------------------------------
 
 
-class PrimaryNav(Vertical):
-    """Left-side rail with one Static-row per registered mode.
+class ModeButton(Static):
+    """One row in the left nav. Focusable via Tab, clickable, Enter activates."""
 
-    Owns no state itself — the host App passes in a list of ``(key, label,
-    icon)`` tuples and reactively re-renders when the active mode changes.
-    Clicks emit :class:`PrimaryNav.Select`.
+    DEFAULT_CSS = """
+    ModeButton {
+        height: 1;
+        padding: 0 2;
+        color: $text-muted;
+        background: $background;
+    }
+    ModeButton:focus {
+        color: $accent;
+        background: $accent 10%;
+        text-style: bold;
+    }
+    ModeButton.active {
+        color: $accent;
+        text-style: bold;
+    }
+    ModeButton.active:focus {
+        background: $accent 20%;
+    }
     """
+
+    can_focus = True
+
+    class Activate(Message):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.name = name
+
+    def __init__(self, name: str, label: str) -> None:
+        super().__init__()
+        self._name = name
+        self._label = label
+        self._is_active = False
+
+    def render(self) -> str:
+        marker = "▸" if self._is_active else " "
+        return f"{marker} {self._label}"
+
+    def set_active(self, active: bool) -> None:
+        self._is_active = active
+        if self.is_mounted:
+            if active:
+                self.add_class("active")
+            else:
+                self.remove_class("active")
+            self.refresh()
+
+    def on_click(self, event: events.Click) -> None:
+        self.post_message(self.Activate(self._name))
+        self.focus()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "enter":
+            event.stop()
+            self.post_message(self.Activate(self._name))
+
+
+class PrimaryNav(Vertical):
+    """Left-side rail. Owns no state itself — host App passes ``(name, label)``
+    tuples and reactively re-renders when the active mode changes."""
 
     DEFAULT_CSS = """
     PrimaryNav {
-        width: 20;
-        background: $surface;
-        padding: 1 0;
+        width: 18;
+        background: $background;
+        padding: 1 0 0 0;
+        border-right: vkey $surface;
     }
-    .nav-row {
+    #nav-title {
         height: 2;
-        padding: 0 1;
-        color: $text-muted;
-    }
-    .nav-row.active {
+        padding: 0 2 1 2;
         color: $accent;
         text-style: bold;
-        background: $accent 15%;
-    }
-    .nav-spacer {
-        height: 1;
-    }
-    .nav-footer {
-        height: 1;
-        padding: 0 1;
-        color: $text-muted;
-        text-style: dim;
     }
     """
 
@@ -206,32 +250,27 @@ class PrimaryNav(Vertical):
             super().__init__()
             self.name = name
 
-    def __init__(self, items: list[tuple[str, str, str]]) -> None:
+    def __init__(self, items: list[tuple[str, str]]) -> None:
         super().__init__()
         self._items = items
         self._active = items[0][0] if items else ""
 
     def compose(self) -> ComposeResult:
-        yield Static(" [b]quran-tui[/b] ", classes="nav-row")
-        yield Static("", classes="nav-spacer")
-        for i, (name, label, icon) in enumerate(self._items, 1):
-            cls = "nav-row active" if name == self._active else "nav-row"
-            yield Static(
-                f"  [dim]Alt+{i}[/dim]  {icon}  {label}",
-                id=f"nav-{name}",
-                classes=cls,
-                markup=True,
-            )
-        yield Static("", classes="nav-spacer")
-        yield Static("[dim]? help · q quit[/dim]", classes="nav-footer")
+        yield Static("quran-tui", id="nav-title")
+        for name, label in self._items:
+            button = ModeButton(name, label)
+            yield button
+
+    def on_mount(self) -> None:
+        # Set initial active state on the buttons.
+        self.set_active(self._active)
 
     def set_active(self, name: str) -> None:
         self._active = name
         if not self.is_mounted:
             return
-        for n, _label, _icon in self._items:
-            row = self.query_one(f"#nav-{n}", Static)
-            if n == name:
-                row.add_class("active")
-            else:
-                row.remove_class("active")
+        for btn in self.query(ModeButton):
+            btn.set_active(btn._name == name)
+
+    def on_mode_button_activate(self, message: ModeButton.Activate) -> None:
+        self.post_message(self.Select(message.name))
