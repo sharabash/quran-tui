@@ -275,6 +275,15 @@ class QuranTuiApp(App[None]):
             return
         if name == self._active_mode:
             return
+        # If we're leaving a mode that toggled select-mode, restore mouse
+        # capture so the rest of the app stays clickable.
+        outgoing = self._modes.get(self._active_mode)
+        exit_select = getattr(outgoing, "action_exit_select_mode", None)
+        if callable(exit_select):
+            try:
+                exit_select()
+            except Exception:
+                pass
         self._active_mode = name
         for n, mode in self._modes.items():
             mode.display = n == name
@@ -305,6 +314,48 @@ class QuranTuiApp(App[None]):
 
     def action_show_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    # --- Mouse-capture toggle (selection mode) ---------------------------
+    #
+    # Textual enables xterm mouse tracking globally so click-to-seek,
+    # click-on-sidebar, and click-on-row work. Side effect: the terminal
+    # can no longer do native click-drag-to-select, which is how every
+    # other TUI (including Claude Code, which uses Ink and never enables
+    # mouse tracking in the first place) gets free copy-on-drag.
+    #
+    # We expose a runtime toggle: when a mode flips into "selection mode",
+    # we write the xterm sequences to disable mouse tracking, the terminal
+    # takes over drag-selection + auto-copy, and we restore tracking when
+    # the user exits the mode.
+    #
+    # Modes 1000 (basic click), 1002 (button-event), 1003 (any-event),
+    # 1006 (SGR coords). We disable all four, then re-enable 1002+1006
+    # which is the combination Textual normally sets.
+
+    def set_terminal_mouse_capture(self, enabled: bool) -> None:
+        if enabled:
+            seq = "\x1b[?1002h\x1b[?1006h"
+        else:
+            seq = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l"
+        driver = getattr(self, "_driver", None)
+        write = getattr(driver, "write", None)
+        flush = getattr(driver, "flush", None)
+        if callable(write):
+            try:
+                write(seq)
+                if callable(flush):
+                    flush()
+                return
+            except Exception:
+                pass
+        # Fallback: direct stdout. Less polite but reliable.
+        import sys
+
+        try:
+            sys.__stdout__.write(seq)
+            sys.__stdout__.flush()
+        except Exception:
+            pass
 
     # --- queue / playback API shared with modes --------------------------
 

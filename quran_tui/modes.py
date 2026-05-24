@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -571,6 +572,8 @@ class StudyMode(Mode):
         Binding("up", "select_prev", "Prev result", show=False),
         Binding("c", "copy_selected", "Copy ayah"),
         Binding("y", "copy_selected", "Copy", show=False),
+        Binding("v", "toggle_select_mode", "Select"),
+        Binding("escape", "exit_select_mode", "Exit select", show=False),
     ]
 
     active_subtab: reactive[int] = reactive(0)
@@ -584,6 +587,11 @@ class StudyMode(Mode):
         # Per-result records {ref, raw_text, edition_label} keyed by index.
         self._result_rows: list[dict[str, str]] = []
         self._selected_row: int = -1
+        # Selection mode (Claude-Code style copy-on-drag). When True we
+        # release the terminal's mouse capture and render raw Arabic so
+        # what the user drags is what gets copied — proper RTL codepoints,
+        # not the reshaped visual form.
+        self._raw_mode: bool = False
 
     def compose(self) -> ComposeResult:
         yield Static(
@@ -771,21 +779,23 @@ class StudyMode(Mode):
     async def _mount_result_rows(self, results: list[dict]) -> None:
         """Render search results as horizontal flex rows: ayah-key left,
         ayah text right-aligned. Stores the original (un-reshaped) text on
-        each row so 'c' can copy the raw codepoints."""
+        each row so 'c' can copy the raw codepoints.
+
+        Arabic wrapping is tricky: if we reshape+bidi the whole ayah we
+        get a single LTR-visual line whose first chars are the LAST words
+        of the original. Letting Textual wrap that string at the column
+        boundary puts the logical tail on top — the bug we're fixing.
+
+        Strategy: mount rows with a placeholder, then once Textual has
+        laid them out and we know the real text-column width, walk the
+        rows and replace each result-text with a pre-wrapped reshape.
+        """
         self._result_rows = []
         self._selected_row = -1
         rows: list[Horizontal] = []
-        # Pre-wrap Arabic at the logical (right-to-left) level before reshape,
-        # so multi-line ayahs read top-to-bottom in the natural order. The
-        # 40-col fudge accounts for sidebar(18) + borders/padding(~12) + the
-        # left ayah-key column(~10). It's a sane default; a SIGWINCH-driven
-        # re-render would be nice-to-have but the wrap point isn't sensitive
-        # to ±5 cols.
-        text_width = max(20, self.app.size.width - 40)
         for i, r in enumerate(results[:50]):
             ref = r.get("ayah_key") or f"{r.get('surah', '?')}:{r.get('ayah', '?')}"
             raw_text = r.get("text") or r.get("snippet") or ""
-            display_text = render_for_terminal_wrapped(raw_text, text_width)
             edition = r.get("edition") or {}
             edition_label = ""
             if isinstance(edition, dict):
@@ -801,14 +811,23 @@ class StudyMode(Mode):
                 {
                     "ref": ref,
                     "raw_text": raw_text,
-                    "display_text": display_text,
+                    "display_text": "",  # filled by _repaint_result_widths
                     "edition_label": edition_label,
                 }
             )
             parity = "even" if i % 2 == 0 else "odd"
+            # Placeholder text — we'll repaint with the real reshape once
+            # the row knows its actual column width. Doing it pre-layout
+            # would force us to estimate and we always estimate wrong.
+            # Rich Text(no_wrap=True) is the only way to stop Textual from
+            # re-wrapping the string after our manual line breaks.
+            text_widget = Static(
+                Text(raw_text, no_wrap=True, justify="right"),
+                classes="result-text",
+            )
             row = Horizontal(
                 Static(ref, classes="result-key", markup=True),
-                Static(display_text, classes="result-text", markup=True),
+                text_widget,
                 id=f"result-row-{i}",
                 classes=f"result-row {parity}",
             )
@@ -817,7 +836,35 @@ class StudyMode(Mode):
         await scroll.remove_children()
         if rows:
             scroll.mount(*rows)
+            self.call_after_refresh(self._repaint_result_widths)
             self._select_row(0)
+
+    def _repaint_result_widths(self) -> None:
+        """After layout, ask each result-text Static for its real width
+        and re-render the Arabic with that width. Called once on mount
+        and again on resize (see on_resize). Cheap: 50 rows × one
+        reshape each ≈ 1 ms."""
+        for i, rec in enumerate(self._result_rows):
+            try:
+                row = self.query_one(f"#result-row-{i}", Horizontal)
+                text_w = row.query_one(".result-text", Static)
+            except Exception:
+                continue
+            # Padding eats 2 cols; leave 1 more as breathing room so the
+            # last word never kisses the border.
+            width = max(10, text_w.size.width - 3)
+            source = rec["raw_text"]
+            display = (
+                source
+                if self._raw_mode
+                else render_for_terminal_wrapped(source, width)
+            )
+            rec["display_text"] = display
+            text_w.update(Text(display, no_wrap=True, justify="right"))
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self._result_rows:
+            self._repaint_result_widths()
 
     def _select_row(self, idx: int) -> None:
         if not self._result_rows:
@@ -852,6 +899,45 @@ class StudyMode(Mode):
     def action_select_prev(self) -> None:
         if self._result_rows:
             self._select_row(self._selected_row - 1)
+
+    def action_toggle_select_mode(self) -> None:
+        self._set_select_mode(not self._raw_mode)
+
+    def action_exit_select_mode(self) -> None:
+        if self._raw_mode:
+            self._set_select_mode(False)
+
+    def _set_select_mode(self, enable: bool) -> None:
+        if enable == self._raw_mode:
+            return
+        self._raw_mode = enable
+        setter = getattr(self.app, "set_terminal_mouse_capture", None)
+        if callable(setter):
+            setter(not enable)
+        # Repaint results: enable=True shows raw RTL Arabic (so drag-copy
+        # yields proper codepoints), enable=False restores the reshaped
+        # left-to-right visual form.
+        if self._result_rows:
+            self._repaint_result_widths()
+        status = self.query_one("#study-status", Static)
+        if enable:
+            status.update(
+                "[bold #e0af68]-- SELECT --[/]  drag mouse to copy · "
+                "[b]v[/b]/[b]Esc[/b] to exit"
+            )
+        else:
+            self._refresh_status_for_selection()
+
+    def _refresh_status_for_selection(self) -> None:
+        if self._selected_row < 0 or not self._result_rows:
+            self.query_one("#study-status", Static).update("[dim]ready[/dim]")
+            return
+        rec = self._result_rows[self._selected_row]
+        ed = f"  ·  {rec['edition_label']}" if rec["edition_label"] else ""
+        self.query_one("#study-status", Static).update(
+            f"[dim]row {self._selected_row + 1}/{len(self._result_rows)}"
+            f"  ·  {rec['ref']}{ed}  ·  press [b]c[/b] to copy[/dim]"
+        )
 
     def action_copy_selected(self) -> None:
         if not self._result_rows or self._selected_row < 0:
