@@ -46,11 +46,40 @@ def build_parser() -> argparse.ArgumentParser:
             "helpers. 0 disables. Default: 13938."
         ),
     )
+    parser.add_argument(
+        "--install-mediakeys",
+        action="store_true",
+        help=(
+            "WSL-only: install + auto-launch the AutoHotkey media-key bridge "
+            "on the Windows side so Play/Pause/Next/Prev/Volume keys drive "
+            "quran-tui when it's running (and fall through to your normal "
+            "Windows handler when it isn't). Offers to winget install "
+            "AutoHotkey v2 if missing, then adds a Startup-folder shortcut."
+        ),
+    )
+    parser.add_argument(
+        "--no-startup",
+        action="store_true",
+        help=(
+            "When using --install-mediakeys, skip adding a Startup-folder "
+            "shortcut. The bridge will only run for the current Windows "
+            "session."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    if args.install_mediakeys:
+        from .mediakeys import install as install_mediakeys
+
+        return install_mediakeys(
+            auto_install_ahk=True,
+            add_startup=not args.no_startup,
+            launch_now=True,
+        )
 
     from .controller import Controller
     from .player import MpvPlayer
