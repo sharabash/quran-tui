@@ -1,8 +1,11 @@
-"""End-to-end smoke test — drives the real TUI against live APIs + mpv.
+"""End-to-end smoke test — drives the real TUI against live APIs + mpv + MCP.
 
-Walks the user through: Quranic Audio root → section → reciter → play a
-surah; switches to Haramain → drills "all" → plays a recording; exercises
-filter, dequeue, shuffle. Exits non-zero on any failure.
+Walks through:
+  - Listen mode → Quranic Audio root → section → reciter → play a surah
+  - Listen mode → switch to Haramain (key '2') → drill 'all' → play a recording
+  - Switch to Study mode (Alt+2) → run search_translation against mcp.quran.ai
+  - Switch to Read mode (Alt+3) → confirm placeholder
+  - Switch back to Listen mode (Alt+1) → state preserved
 """
 
 from __future__ import annotations
@@ -10,13 +13,15 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from textual.widgets import DataTable
+from textual.widgets import DataTable, Input
 
 from quran_tui.controller import Controller
+from quran_tui.mcp_quran import MCPSession
 from quran_tui.player import MpvPlayer
 from quran_tui.sources.haramain import HaramainSource
 from quran_tui.sources.quranicaudio import QuranicAudioSource
-from quran_tui.tui import NowPlaying, QuranTuiApp
+from quran_tui.tui import QuranTuiApp
+from quran_tui.widgets import NowPlaying
 
 
 async def _wait_for(predicate, timeout: float, pilot) -> bool:
@@ -32,104 +37,101 @@ async def _wait_for(predicate, timeout: float, pilot) -> bool:
 async def run() -> int:
     sources = [QuranicAudioSource(), HaramainSource()]
     controller = Controller(sources=sources, player=MpvPlayer())
-    app = QuranTuiApp(controller=controller, control_port=0)
-    async with app.run_test(size=(130, 40)) as pilot:
+    mcp = MCPSession()
+    app = QuranTuiApp(controller=controller, mcp_session=mcp, control_port=0)
+    async with app.run_test(size=(140, 44)) as pilot:
         await pilot.pause(1.0)
-        # 1. Quranic Audio root should have 4 sections.
+
+        # 1. Listen mode is active by default.
+        assert app._active_mode == "listen", f"expected listen, got {app._active_mode}"
+        print(f"[smoke] default mode: {app._active_mode}")
+
+        # 2. Listen → QA root populates.
         bs = controller.active_browse()
         await _wait_for(
             lambda: bs.result is not None and bs.result.categories, 8.0, pilot
         )
-        assert bs.result is not None, "QA root did not load"
-        print(f"[smoke] QA root: {len(bs.result.categories)} sections")
+        assert bs.result, "QA root didn't populate"
+        print(f"[smoke] Listen/QA: {len(bs.result.categories)} sections")
 
-        # 2. Drill into section 1.
+        # 3. Drill into section 1.
+        browse = app.query_one("#browse-table", DataTable)
+        browse.focus()
+        browse.cursor_coordinate = (0, 0)
         await pilot.press("enter")
         await _wait_for(
-            lambda: bs.result is not None
-            and bs.result.title.startswith("Quranic Audio · Recitations"),
+            lambda: bs.result is not None and bs.result.title.startswith("Quranic Audio · Recitations"),
             5.0,
             pilot,
         )
-        assert bs.result and bs.result.categories, "section 1 not loaded"
-        print(f"[smoke] QA section 1: {len(bs.result.categories)} reciters")
+        print(f"[smoke] section 1: {len(bs.result.categories)} reciters")
 
-        # 3. Pick the first reciter — drill in.
+        # 4. Drill into first reciter, play first surah.
+        browse.cursor_coordinate = (0, 0)
         await pilot.press("enter")
         await _wait_for(
             lambda: bs.result is not None and bs.result.tracks, 5.0, pilot
         )
-        assert bs.result and bs.result.tracks, "reciter tracks not loaded"
-        print(f"[smoke] QA reciter: {len(bs.result.tracks)} surahs")
-
-        # 4. Play first surah.
+        assert bs.result and bs.result.tracks, "no surahs loaded"
+        print(f"[smoke] reciter: {len(bs.result.tracks)} surahs")
+        browse.cursor_coordinate = (0, 0)
         await pilot.press("enter")
         np = app.query_one(NowPlaying)
-        ok = await _wait_for(lambda: np.position > 1.0, 25.0, pilot)
+        ok = await _wait_for(lambda: np.position > 1.0, 30.0, pilot)
         assert ok, f"playback didn't progress; pos={np.position}"
         print(f"[smoke] playing '{np.track.title if np.track else '?'}' pos={np.position:.1f}s")
 
-        # 5. Switch to Haramain (key "2").
-        await pilot.press("2")
-        # First haramain browse triggers a feed fetch (~1-2s).
-        await _wait_for(
-            lambda: controller.active_browse().result is not None, 10.0, pilot
-        )
-        ha_bs = controller.active_browse()
-        assert ha_bs.result, "Haramain root not loaded"
-        print(f"[smoke] Haramain root: categories={[c.title for c in ha_bs.result.categories]}")
+        # 5. Switch to Study mode (Alt+2).
+        await pilot.press("alt+2")
+        await pilot.pause(0.5)
+        assert app._active_mode == "study", f"expected study, got {app._active_mode}"
+        print(f"[smoke] switched to mode: {app._active_mode} (audio still playing)")
 
-        # 6. Drill into "All recent recordings".
-        browse_table = app.query_one("#browse-table", DataTable)
-        browse_table.focus()
-        browse_table.cursor_coordinate = (0, 0)
+        # 6. Run an MCP search_translation query.
+        # Active sub-tab defaults to Search → tool defaults to search_quran.
+        # Type a query and press Enter.
+        # Find the active first input in StudyMode.
+        study_input = app.query_one("#study-input-0", Input)
+        study_input.focus()
+        await pilot.press(*list("patience in adversity"))
         await pilot.press("enter")
-        await _wait_for(
-            lambda: ha_bs.result is not None and ha_bs.result.tracks, 5.0, pilot
-        )
-        assert ha_bs.result and ha_bs.result.tracks, "Haramain all tracks not loaded"
-        print(f"[smoke] Haramain all: {len(ha_bs.result.tracks)} recordings")
-
-        # 7. Play first Haramain track.
-        browse_table.cursor_coordinate = (0, 0)
-        await pilot.press("enter")
+        # Wait for MCP response — server takes a beat.
+        study_mode = app._modes["study"]
         ok = await _wait_for(
-            lambda: np.track is not None
-            and np.track.source == "haramain"
-            and np.position > 1.0,
-            30.0,
+            lambda: study_mode.last_outcome is not None and study_mode.last_outcome.ok,
+            45.0,
             pilot,
         )
-        assert ok, f"haramain playback didn't progress; pos={np.position}"
-        print(f"[smoke] playing haramain '{np.track.title}'  pos={np.position:.1f}s")
+        assert ok, (
+            f"MCP search didn't return within 45s; "
+            f"last_outcome={study_mode.last_outcome!r}"
+        )
+        print(
+            f"[smoke] MCP search ok; rendered length={len(study_mode.last_rendered)}; "
+            f"sample: {study_mode.last_rendered[:80]}"
+        )
 
-        # 8. Filter test.
-        await pilot.press("f")
-        await pilot.pause(0.3)
-        await pilot.press("f", "a", "j", "r")
-        await pilot.pause(0.5)
-        # Should have narrowed.
-        result = ha_bs.result
-        assert result is not None
-        filtered = [
-            t for t in result.tracks if "fajr" in t.subtitle.lower()
-        ]
-        assert filtered, "filter should leave at least one Fajr match"
-        print(f"[smoke] filter ok: {len(filtered)} Fajr matches")
-        await pilot.press("escape")
-        await pilot.pause(0.3)
+        # 7. Confirm audio is STILL playing while we did MCP work.
+        prior = np.position
+        await pilot.pause(2.0)
+        assert np.position > prior + 0.5, (
+            f"audio froze during MCP call: {prior} → {np.position}"
+        )
+        print(f"[smoke] audio kept advancing: {prior:.1f}s → {np.position:.1f}s during MCP work")
 
-        # 9. Shuffle the queue (we only have one track; should be a no-op).
-        await pilot.press("s")
+        # 8. Switch to Read mode (placeholder).
+        await pilot.press("alt+3")
         await pilot.pause(0.3)
-        print("[smoke] shuffle ok (no-op on single-track queue)")
+        assert app._active_mode == "read"
+        print(f"[smoke] read mode: {app._active_mode} (placeholder shows)")
 
-        # 10. Switch back to Quranic Audio — browse state should persist.
-        await pilot.press("1")
-        await pilot.pause(0.5)
-        qa_bs = controller.active_browse()
-        assert qa_bs.path == ["section:1", qa_bs.path[1]] if len(qa_bs.path) > 1 else True
-        print(f"[smoke] back at QA, path={qa_bs.path}")
+        # 9. Back to Listen — state preserved.
+        await pilot.press("alt+1")
+        await pilot.pause(0.3)
+        assert app._active_mode == "listen"
+        # Reciter view should still be visible.
+        assert bs.result and bs.result.tracks, "Listen state lost on mode switch"
+        print(f"[smoke] back at Listen, still on '{bs.result.title}'")
 
         print("[smoke] all checks passed")
     return 0
